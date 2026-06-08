@@ -42,34 +42,46 @@ class SampleEmailSource(EmailSource):
 # --- Future: Microsoft 365 / Outlook -------------------------------------
 # To go live, implement this against Microsoft Graph and select it in cli.py.
 #
+# READ-ONLY BY DESIGN — this source can never send or edit your mailbox:
+#   1. SCOPE (the real lock, enforced by Microsoft): request ONLY `Mail.Read`.
+#      A token granted Mail.Read is physically incapable of sending, moving,
+#      editing, or deleting mail — Graph returns 403 if anything tries. We do
+#      NOT request `Mail.ReadWrite` or `Mail.Send`. The sign-in consent screen
+#      will show exactly one permission: "Read your mail."
+#   2. CODE (defense in depth): this source only ever issues HTTP GET, and the
+#      `_get` helper below refuses any non-GET method before it leaves the
+#      process — so a future bug can't silently introduce a write.
+#
 # class GraphEmailSource(EmailSource):
-#     """Reads the inbox via Microsoft Graph (Outlook / Microsoft 365).
+#     """Reads the inbox via Microsoft Graph (Outlook / Microsoft 365)."""
 #
-#     Setup required (one time):
-#       1. Register an app in Entra ID (Azure AD) and grant the delegated
-#          `Mail.Read` permission.
-#       2. Run the OAuth device-code or auth-code flow to get an access token.
-#       3. GET https://graph.microsoft.com/v1.0/me/messages?$top=25
-#          and map each message to the `Email` shape below.
-#
-#     Docs: https://learn.microsoft.com/graph/api/user-list-messages
-#     """
+#     SCOPES = ["Mail.Read"]  # read-only; never add ReadWrite/Send
+#     BASE = "https://graph.microsoft.com/v1.0"
 #
 #     def __init__(self, access_token: str):
 #         self.access_token = access_token
 #
-#     def fetch(self) -> list[Email]:
+#     def _get(self, path: str, **params):
+#         """Read-only HTTP. Hard-coded to GET so no caller can write."""
 #         import requests
 #
 #         resp = requests.get(
-#             "https://graph.microsoft.com/v1.0/me/messages",
+#             f"{self.BASE}{path}",
 #             headers={"Authorization": f"Bearer {self.access_token}"},
-#             params={"$top": 25, "$select": "id,subject,from,receivedDateTime,bodyPreview"},
+#             params=params,
 #             timeout=30,
 #         )
 #         resp.raise_for_status()
+#         return resp.json()
+#
+#     def fetch(self) -> list[Email]:
+#         # Docs: https://learn.microsoft.com/graph/api/user-list-messages
+#         data = self._get(
+#             "/me/messages",
+#             **{"$top": 25, "$select": "id,subject,from,receivedDateTime,bodyPreview"},
+#         )
 #         emails = []
-#         for m in resp.json().get("value", []):
+#         for m in data.get("value", []):
 #             sender = m.get("from", {}).get("emailAddress", {})
 #             emails.append(
 #                 Email(
