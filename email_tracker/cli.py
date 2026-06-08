@@ -88,11 +88,33 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Classify the inbox and track deals.")
     p.add_argument("--db", default=DEFAULT_DB, help="SQLite database file.")
     p.add_argument(
+        "--source", choices=["sample", "outlook"], default="sample",
+        help="Where to read email from. 'outlook' is live, read-only Microsoft "
+             "Graph (needs GRAPH_CLIENT_ID; see graph_source.py).",
+    )
+    p.add_argument(
+        "--limit", type=int, default=25,
+        help="Max emails to fetch from a live source (default 25).",
+    )
+    p.add_argument(
         "--mark-responded", nargs="+", metavar="ID", default=[],
         help="Mark one or more email IDs as responded, then show the dashboard.",
     )
     p.add_argument("--reset", action="store_true", help="Erase all stored data.")
     return p
+
+
+def load_source(args):
+    """Build the chosen email source. Outlook deps load only when requested."""
+    if args.source == "outlook":
+        from graph_source import GraphAuthError, GraphEmailSource
+
+        try:
+            return GraphEmailSource.from_env(limit=args.limit)
+        except GraphAuthError as exc:
+            print(f"{RED}{exc}{RESET}")
+            return None
+    return SampleEmailSource()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         status = f"{GREEN}marked responded{RESET}" if ok else f"{RED}not found{RESET}"
         print(f"{DIM}  email {email_id}: {status}{RESET}")
 
+    source = load_source(args)
+    if source is None:
+        return 1
+
     try:
         client = anthropic.Anthropic()
     except Exception as exc:  # missing key, etc.
@@ -115,7 +141,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Set ANTHROPIC_API_KEY in your environment and try again.")
         return 1
 
-    emails = SampleEmailSource().fetch()
+    print(f"{DIM}Reading email from: {BOLD}{args.source}{RESET}")
+    try:
+        emails = source.fetch()
+    except Exception as exc:
+        print(f"{RED}Failed to fetch email: {exc}{RESET}")
+        return 1
 
     results: list[tuple[Email, Classification, bool]] = []
     new_count = 0

@@ -1,1 +1,5 @@
 anthropic>=0.92.0
+
+# Required only for the live Outlook source (--source outlook):
+msal>=1.28.0
+requests>=2.31.0

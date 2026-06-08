@@ -18,14 +18,14 @@ changing the rest of the pipeline.
 
 ```
 email_source.py   →   classifier.py        →   store.py     →   cli.py
-(where emails         (Claude turns each        (SQLite:        (renders the
- come from)            email into a              cache + deal    dashboard)
-                       validated Classification) memory)
+graph_source.py       (Claude turns each        (SQLite:        (renders the
+(where emails          email into a              cache + deal    dashboard)
+ come from)            validated Classification) memory)
 ```
 
-- `email_source.py` — a provider-agnostic `Email` shape and sources.
-  `SampleEmailSource` ships now; a `GraphEmailSource` for Outlook is stubbed
-  with the exact Graph calls needed to go live.
+- `email_source.py` / `graph_source.py` — a provider-agnostic `Email` shape
+  and two sources: `SampleEmailSource` (bundled inbox, zero setup) and
+  `GraphEmailSource` (live, **read-only** Microsoft 365 / Outlook).
 - `classifier.py` — calls Claude with **structured outputs**, so each email
   comes back as a validated object (`needs_reply`, `priority`, `deal_name`,
   `deal_stage`, `suggested_action`, …) instead of free text.
@@ -55,14 +55,36 @@ python cli.py --reset               # forget everything and start fresh
 python cli.py --db /path/tracker.db # use a specific database file
 ```
 
+## Live Outlook (read-only)
+
+The `outlook` source reads your real Microsoft 365 / Outlook inbox via
+Microsoft Graph. **It can never send or edit your mailbox** — it requests only
+the `Mail.Read` scope (enforced by Microsoft) and issues only HTTP GET. At
+sign-in you'll see exactly one permission: *"Read your mail."*
+
+One-time setup (free):
+
+1. Register an app at [entra.microsoft.com](https://entra.microsoft.com) →
+   **App registrations → New**. Under **Authentication → Advanced**, set
+   *Allow public client flows* = **Yes**. Under **API permissions**, add
+   **Microsoft Graph → Delegated → `Mail.Read`** (and nothing else).
+2. Copy the **Application (client) ID**.
+3. Run it — you'll get a code to enter at microsoft.com/devicelogin once; the
+   token is then cached locally for later runs:
+
+   ```bash
+   export GRAPH_CLIENT_ID=<your-app-client-id>
+   # export GRAPH_TENANT_ID=<tenant>   # optional, defaults to "common"
+   python cli.py --source outlook --limit 25
+   ```
+
 ## Taking it to production
 
-This PoC has the classifier and persistence. A full app would add:
+This PoC has the classifier, persistence, and a live read-only Outlook source.
+A full app would add:
 
-1. **Live inbox** — implement `GraphEmailSource` (see the stub in
-   `email_source.py`) using Microsoft Graph + OAuth. Outlook supports webhooks
-   so you can react to new mail in near-real-time.
-2. **A server** — something always-on to poll/receive mail and run the
-   classifier continuously (the SQLite store would graduate to Postgres).
-3. **A richer UI** — the terminal dashboard becomes a web view with a deals
+1. **Continuous sync** — Outlook supports Graph webhooks/subscriptions, so an
+   always-on server could react to new mail in near-real-time instead of being
+   run by hand (the SQLite store would graduate to Postgres).
+2. **A richer UI** — the terminal dashboard becomes a web view with a deals
    pipeline board.
