@@ -1,12 +1,20 @@
 """Proof-of-concept CLI: classify the inbox and print a triage dashboard.
 
+Classifications are cached in a local SQLite database (see store.py), so
+re-runs are instant and free for emails already seen, deals accumulate across
+runs, and you can mark emails as responded.
+
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...
-    python cli.py
+    python cli.py                          # classify (cached) + show dashboard
+    python cli.py --mark-responded 1 6     # mark emails as handled
+    python cli.py --reset                  # forget everything and start over
+    python cli.py --db /path/to/tracker.db # use a specific database file
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from collections import defaultdict
 
@@ -14,6 +22,7 @@ import anthropic
 
 from classifier import Classification, Priority, classify_email
 from email_source import Email, SampleEmailSource
+from store import DEFAULT_DB, Store
 
 # ANSI colors — degrade gracefully if the terminal doesn't support them.
 RESET = "\033[0m"
@@ -40,7 +49,6 @@ def render_to_respond(items: list[tuple[Email, Classification]]) -> None:
         print(f"{DIM}  Inbox zero — nothing needs a reply.{RESET}")
         return
 
-    # Highest priority first.
     items.sort(key=lambda pair: PRIORITY_RANK[pair[1].priority])
     for email, c in items:
         color = PRIORITY_COLOR[c.priority]
@@ -48,39 +56,58 @@ def render_to_respond(items: list[tuple[Email, Classification]]) -> None:
         deal = f" {CYAN}· {c.deal_name}{RESET}" if c.deal_name else ""
         deadline = f"  {RED}⏰ {c.deadline}{RESET}" if c.deadline else ""
         print(f"\n  {tag} {BOLD}{email.subject}{RESET}{deal}{deadline}")
-        print(f"       {DIM}from {email.from_name} <{email.from_addr}>{RESET}")
+        print(f"       {DIM}id {email.id} · from {email.from_name} <{email.from_addr}>{RESET}")
         print(f"       {c.summary}")
         print(f"       {GREEN}→ {c.suggested_action}{RESET}")
 
 
-def render_no_reply(items: list[tuple[Email, Classification]]) -> None:
-    banner(f"✓  NO REPLY NEEDED  ({len(items)})")
-    for email, c in items:
+def render_deals(store: Store) -> None:
+    deals = store.get_deals()
+    banner(f"💼  DEALS  ({len(deals)})")
+    if not deals:
+        print(f"{DIM}  No deal-related email detected yet.{RESET}")
+        return
+
+    for d in deals:
+        stage = f" {DIM}({d['stage']}){RESET}" if d["stage"] else ""
+        flag = f"  {RED}{d['awaiting']} awaiting reply{RESET}" if d["awaiting"] else ""
+        count = f"{DIM}{d['email_count']} email(s){RESET}"
+        print(f"\n  {BOLD}{d['name']}{RESET}{stage}{flag}")
+        print(f"       {count} · {DIM}last activity {d['last_activity'][:10]}{RESET}")
+
+
+def render_handled(no_reply: list[tuple[Email, Classification]], responded: int) -> None:
+    banner(f"✓  HANDLED  ({len(no_reply) + responded})")
+    if responded:
+        print(f"  {GREEN}{responded} email(s) marked responded.{RESET}")
+    for email, c in no_reply:
         print(f"  {DIM}· [{c.category.value}] {email.subject} — {c.summary}{RESET}")
 
 
-def render_deals(items: list[tuple[Email, Classification]]) -> None:
-    deals: dict[str, list[tuple[Email, Classification]]] = defaultdict(list)
-    for email, c in items:
-        if c.is_deal_related and c.deal_name:
-            deals[c.deal_name].append((email, c))
-
-    banner(f"💼  DEALS  ({len(deals)})")
-    if not deals:
-        print(f"{DIM}  No deal-related email detected.{RESET}")
-        return
-
-    for name, pairs in sorted(deals.items()):
-        stages = {c.deal_stage.value for _, c in pairs if c.deal_stage}
-        stage = f" {DIM}({', '.join(sorted(stages))}){RESET}" if stages else ""
-        needs = sum(1 for _, c in pairs if c.needs_reply)
-        flag = f"  {RED}{needs} awaiting reply{RESET}" if needs else ""
-        print(f"\n  {BOLD}{name}{RESET}{stage}{flag}")
-        for email, c in pairs:
-            print(f"       {DIM}· {c.summary}{RESET}")
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Classify the inbox and track deals.")
+    p.add_argument("--db", default=DEFAULT_DB, help="SQLite database file.")
+    p.add_argument(
+        "--mark-responded", nargs="+", metavar="ID", default=[],
+        help="Mark one or more email IDs as responded, then show the dashboard.",
+    )
+    p.add_argument("--reset", action="store_true", help="Erase all stored data.")
+    return p
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    store = Store(args.db)
+
+    if args.reset:
+        store.reset()
+        print(f"{DIM}Store reset — all emails and deals forgotten.{RESET}")
+
+    for email_id in args.mark_responded:
+        ok = store.mark_responded(email_id)
+        status = f"{GREEN}marked responded{RESET}" if ok else f"{RED}not found{RESET}"
+        print(f"{DIM}  email {email_id}: {status}{RESET}")
+
     try:
         client = anthropic.Anthropic()
     except Exception as exc:  # missing key, etc.
@@ -89,23 +116,44 @@ def main() -> int:
         return 1
 
     emails = SampleEmailSource().fetch()
-    print(f"{DIM}Classifying {len(emails)} emails with {BOLD}Claude{RESET}{DIM}...{RESET}")
 
-    results: list[tuple[Email, Classification]] = []
-    for i, email in enumerate(emails, 1):
-        print(f"{DIM}  [{i}/{len(emails)}] {email.subject[:50]}...{RESET}")
-        try:
-            results.append((email, classify_email(client, email)))
-        except anthropic.APIError as exc:
-            print(f"{RED}  ! API error on '{email.subject}': {exc}{RESET}")
+    results: list[tuple[Email, Classification, bool]] = []
+    new_count = 0
+    for email in emails:
+        cached = store.get_email(email.id)
+        if cached is not None:
+            c = Classification.model_validate_json(cached["classification"])
+            responded = bool(cached["responded"])
+        else:
+            print(f"{DIM}  classifying: {email.subject[:50]}...{RESET}")
+            try:
+                c = classify_email(client, email)
+            except anthropic.APIError as exc:
+                print(f"{RED}  ! API error on '{email.subject}': {exc}{RESET}")
+                continue
+            store.save_email(email, c)
+            if c.is_deal_related and c.deal_name:
+                store.upsert_deal(c.deal_name, c.deal_stage and c.deal_stage.value, email.received)
+            responded = False
+            new_count += 1
+        results.append((email, c, responded))
 
-    to_respond = [r for r in results if r[1].needs_reply]
-    no_reply = [r for r in results if not r[1].needs_reply]
+    cached_count = len(results) - new_count
+    print(
+        f"{DIM}Processed {len(results)} emails "
+        f"({new_count} newly classified, {cached_count} from cache).{RESET}"
+    )
+
+    to_respond = [(e, c) for e, c, resp in results if c.needs_reply and not resp]
+    handled_resp = sum(1 for _, c, resp in results if c.needs_reply and resp)
+    no_reply = [(e, c) for e, c, resp in results if not c.needs_reply]
 
     render_to_respond(to_respond)
-    render_deals(results)
-    render_no_reply(no_reply)
+    render_deals(store)
+    render_handled(no_reply, handled_resp)
     print()
+
+    store.close()
     return 0
 
 
