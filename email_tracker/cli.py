@@ -88,9 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Classify the inbox and track deals.")
     p.add_argument("--db", default=DEFAULT_DB, help="SQLite database file.")
     p.add_argument(
-        "--source", choices=["sample", "outlook"], default="sample",
-        help="Where to read email from. 'outlook' is live, read-only Microsoft "
-             "Graph (needs GRAPH_CLIENT_ID; see graph_source.py).",
+        "--source", choices=["sample", "outlook", "mcp"], default="sample",
+        help="Where to read email from: 'sample' (bundled), 'outlook' (live, "
+             "read-only Microsoft Graph; needs GRAPH_CLIENT_ID), or 'mcp' (read "
+             "a JSON export an agent produced via the Outlook MCP connector).",
+    )
+    p.add_argument(
+        "--export", default=None,
+        help="Path to the JSON export for --source mcp (default inbox_export.json).",
     )
     p.add_argument(
         "--limit", type=int, default=25,
@@ -105,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_source(args):
-    """Build the chosen email source. Outlook deps load only when requested."""
+    """Build the chosen email source. Optional deps load only when requested."""
     if args.source == "outlook":
         from graph_source import GraphAuthError, GraphEmailSource
 
@@ -114,6 +119,10 @@ def load_source(args):
         except GraphAuthError as exc:
             print(f"{RED}{exc}{RESET}")
             return None
+    if args.source == "mcp":
+        from mcp_source import DEFAULT_EXPORT, MCPExportSource
+
+        return MCPExportSource(args.export or DEFAULT_EXPORT)
     return SampleEmailSource()
 
 

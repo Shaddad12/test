@@ -19,13 +19,16 @@ changing the rest of the pipeline.
 ```
 email_source.py   →   classifier.py        →   store.py     →   cli.py
 graph_source.py       (Claude turns each        (SQLite:        (renders the
-(where emails          email into a              cache + deal    dashboard)
- come from)            validated Classification) memory)
+mcp_source.py          email into a              cache + deal    dashboard)
+(where emails          validated Classification) memory)
+ come from)
 ```
 
-- `email_source.py` / `graph_source.py` — a provider-agnostic `Email` shape
-  and two sources: `SampleEmailSource` (bundled inbox, zero setup) and
-  `GraphEmailSource` (live, **read-only** Microsoft 365 / Outlook).
+- `email_source.py` / `graph_source.py` / `mcp_source.py` — a
+  provider-agnostic `Email` shape and three sources: `SampleEmailSource`
+  (bundled inbox, zero setup), `GraphEmailSource` (live, **read-only**
+  Microsoft 365 / Outlook via Graph), and `MCPExportSource` (read email an
+  *agent* fetched through the Outlook MCP connector — see below).
 - `classifier.py` — calls Claude with **structured outputs**, so each email
   comes back as a validated object (`needs_reply`, `priority`, `deal_name`,
   `deal_stage`, `suggested_action`, …) instead of free text.
@@ -54,6 +57,28 @@ python cli.py --mark-responded 1 6  # mark emails handled → drop off the queue
 python cli.py --reset               # forget everything and start fresh
 python cli.py --db /path/tracker.db # use a specific database file
 ```
+
+## Agent-driven (MCP connector)
+
+If you're running this inside an agent that has the **Outlook MCP connector**
+(e.g. Claude Code), you don't need an Entra app at all. The agent does the
+read-only fetch and hands the result to the classifier:
+
+```
+agent (outlook_email_search)  →  inbox_export.json  →  python cli.py --source mcp
+```
+
+The agent writes the connector's results as a JSON array of normalized emails
+to `inbox_export.json` (the source tolerates connector key names like
+`bodyPreview`/`receivedDateTime`), then:
+
+```bash
+python cli.py --source mcp                 # reads inbox_export.json
+python cli.py --source mcp --export x.json  # or a specific file
+```
+
+`inbox_export.json` holds real mailbox content, so it's gitignored — never
+commit it.
 
 ## Live Outlook (read-only)
 
