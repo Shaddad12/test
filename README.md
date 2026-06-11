@@ -45,7 +45,33 @@ genuinely new mail costs an API call. Deals persist in their own table and keep
 their latest stage and last-activity date even when they're not in the current
 batch — that's the "tracks all deals" memory.
 
-## Run it
+## Live dashboard
+
+A web dashboard with a **deal tracker** and an auto-updating **to-do list**
+that stays current as new email arrives. It is **read-only** — a background
+poller only *reads* mail, classifies anything new with Claude, and persists it;
+the browser auto-refreshes every few seconds. Marking something done writes to
+the local tracker DB, never to your mailbox.
+
+```bash
+pip install -r requirements.txt
+export ANTHROPIC_API_KEY=sk-ant-...
+cd email_tracker
+EMAIL_SOURCE=sample python app.py          # then open http://localhost:5000
+# EMAIL_SOURCE=outlook → live read-only Microsoft Graph (needs GRAPH_CLIENT_ID)
+```
+
+Knobs (env vars): `EMAIL_SOURCE` (sample|outlook|mcp), `POLL_INTERVAL` (secs,
+default 60), `PORT` (default 5000), `TRACKER_DB`, `EMAIL_LIMIT`.
+
+The dashboard shows:
+- **To-Do** — emails needing a reply (priority-sorted, with suggested action
+  and deadline) plus personal to-dos you add. Check an email off to mark it
+  responded; it drops from the list and its deal's "awaiting reply" count.
+- **Deal Tracker** — every deal as a pipeline board grouped by stage, with
+  email counts and a flag for deals awaiting your reply.
+
+## Run the CLI
 
 ```bash
 pip install -r requirements.txt
