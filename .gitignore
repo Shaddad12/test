@@ -4,3 +4,4 @@ __pycache__/
 .graph_token_cache.json
 inbox_export.json
 *_export.json
+inbox_dashboard.html
