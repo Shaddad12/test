@@ -5,3 +5,4 @@ __pycache__/
 inbox_export.json
 *_export.json
 inbox_dashboard.html
+deal_dashboard.html
