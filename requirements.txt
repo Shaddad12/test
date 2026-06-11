@@ -2,7 +2,8 @@ anthropic>=0.92.0
 
 # Web dashboard (app.py):
 flask>=3.0
+gunicorn>=21.2          # production WSGI server for 24/7 deployment
 
-# Required only for the live Outlook source (--source outlook):
+# Required only for the live Outlook source (EMAIL_SOURCE=outlook):
 msal>=1.28.0
 requests>=2.31.0

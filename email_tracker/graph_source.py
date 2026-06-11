@@ -39,7 +39,12 @@ from email_source import Email, EmailSource
 # Read-only. Do NOT add Mail.ReadWrite or Mail.Send — see module docstring.
 SCOPES = ["Mail.Read"]
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-_TOKEN_CACHE = str(Path(__file__).with_name(".graph_token_cache.json"))
+def _token_cache_path() -> str:
+    # Configurable so a 24/7 deployment can persist the cache on a mounted
+    # volume and stay signed in across restarts.
+    return os.environ.get(
+        "GRAPH_TOKEN_CACHE", str(Path(__file__).with_name(".graph_token_cache.json"))
+    )
 
 
 class GraphAuthError(RuntimeError):
@@ -78,8 +83,9 @@ class GraphEmailSource(EmailSource):
             ) from exc
 
         cache = msal.SerializableTokenCache()
-        if os.path.exists(_TOKEN_CACHE):
-            cache.deserialize(Path(_TOKEN_CACHE).read_text())
+        token_cache = _token_cache_path()
+        if os.path.exists(token_cache):
+            cache.deserialize(Path(token_cache).read_text())
 
         app = msal.PublicClientApplication(
             self.client_id,
@@ -106,7 +112,7 @@ class GraphEmailSource(EmailSource):
             )
 
         if cache.has_state_changed:
-            path = Path(_TOKEN_CACHE)
+            path = Path(token_cache)
             path.write_text(cache.serialize())
             os.chmod(path, 0o600)  # token cache is sensitive — owner-only
 

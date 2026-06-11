@@ -71,6 +71,26 @@ The dashboard shows:
 - **Deal Tracker** — every deal as a pipeline board grouped by stage, with
   email counts and a flag for deals awaiting your reply.
 
+## Deploy (run 24/7)
+
+"Always updating" means it has to run somewhere persistent. The dashboard ships
+with a Dockerfile (gunicorn, single worker so the poller stays a singleton) and
+a compose file with a volume that persists the tracker DB and the Outlook
+sign-in across restarts.
+
+```bash
+cd email_tracker
+# put ANTHROPIC_API_KEY (and GRAPH_CLIENT_ID for Outlook) in a .env file here
+EMAIL_SOURCE=outlook GRAPH_CLIENT_ID=<app-id> docker compose up -d
+# dashboard at http://localhost:5000 ; tune freshness with POLL_INTERVAL (default 30s)
+```
+
+Freshness is near-real-time by polling (default every 30s) — no webhooks
+needed. For the live Outlook source, the first run prints a device-login code
+in the container logs (`docker compose logs -f`); enter it once at
+microsoft.com/devicelogin and the refresh token is cached on the volume so it
+stays signed in. It remains **read-only** throughout (`Mail.Read`, GET only).
+
 ## Run the CLI
 
 ```bash

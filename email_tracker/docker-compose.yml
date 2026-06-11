@@ -1,0 +1,22 @@
+# Run the dashboard 24/7:  docker compose up -d   (from this directory)
+# Reads config from the environment / a .env file in this directory.
+services:
+  tracker:
+    build:
+      context: ..
+      dockerfile: email_tracker/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY}
+      EMAIL_SOURCE: ${EMAIL_SOURCE:-sample}   # sample | outlook | mcp
+      POLL_INTERVAL: ${POLL_INTERVAL:-30}      # seconds — near-real-time
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}    # required for EMAIL_SOURCE=outlook
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-common}
+      EMAIL_LIMIT: ${EMAIL_LIMIT:-25}
+    volumes:
+      - tracker-data:/data   # persists tracker.db + Outlook token cache
+    restart: unless-stopped
+
+volumes:
+  tracker-data:
